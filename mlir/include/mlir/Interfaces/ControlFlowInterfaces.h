@@ -345,6 +345,27 @@ Region *getEnclosingRepetitiveRegion(Value value);
 void populateRegionBranchOpInterfaceCanonicalizationPatterns(
     RewritePatternSet &patterns, StringRef opName, PatternBenefit benefit = 1);
 
+using NonSuccessorInputReplacementBuilder =
+    std::function<Value(OpBuilder &, Location, Value)>;
+using PatternMatcherFn = std::function<LogicalResult(Operation *)>;
+namespace detail {
+static inline Value defaultReplBuilderFn(OpBuilder &builder, Location loc,
+                                         Value value) {
+  llvm_unreachable("defaultReplBuilderFn not implemented");
+}
+
+static inline LogicalResult defaultMatcherFn(Operation *op) {
+  return success();
+}
+} // namespace detail
+
+void populateRegionBranchOpInterfaceInliningPattern(
+    RewritePatternSet &patterns, StringRef opName,
+    PatternMatcherFn matcherFn = detail::defaultMatcherFn,
+    NonSuccessorInputReplacementBuilder replBuilderFn =
+        detail::defaultReplBuilderFn,
+    PatternBenefit benefit = 1);
+
 //===----------------------------------------------------------------------===//
 // ControlFlow Traits
 //===----------------------------------------------------------------------===//

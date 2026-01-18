@@ -704,6 +704,22 @@ OperandRange ForOp::getEntrySuccessorOperands(RegionSuccessor successor) {
 
 void ForOp::getSuccessorRegions(RegionBranchPoint point,
                                 SmallVectorImpl<RegionSuccessor> &regions) {
+  std::optional<APInt> tripCount = getStaticTripCount();
+  if (point.isParent()) {
+    if (tripCount.has_value() && *tripCount == 0) {
+      regions.push_back(RegionSuccessor::parent());
+      return;
+    } else if (tripCount.has_value()) {
+      regions.push_back(RegionSuccessor(&getRegion()));
+      return;
+    }
+  } else {
+    if (tripCount.has_value() && *tripCount == 1) {
+      regions.push_back(RegionSuccessor::parent());
+      return;
+    }
+  }
+
   // Both the operation itself and the region may be branching into the body or
   // back into the operation itself. It is possible for loop not to enter the
   // body.
@@ -1049,11 +1065,26 @@ struct ForOpTensorCastFolder : public OpRewritePattern<ForOp> {
 };
 } // namespace
 
+static Value forOpReplacementBuilder(OpBuilder &builder, Location loc,
+                                     Value value) {
+  auto blockArg = cast<BlockArgument>(value);
+  assert(blockArg.getArgNumber() == 0);
+  auto forOp = cast<ForOp>(blockArg.getOwner()->getParentOp());
+  return forOp.getLowerBound();
+}
+
+static LogicalResult forOpReplacementMatcher(Operation *op) {
+  return success();
+}
+
 void ForOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                         MLIRContext *context) {
-  results.add<SimplifyTrivialLoops, ForOpTensorCastFolder>(context);
+  results.add</*SimplifyTrivialLoops,*/ ForOpTensorCastFolder>(context);
   populateRegionBranchOpInterfaceCanonicalizationPatterns(
       results, ForOp::getOperationName());
+  populateRegionBranchOpInterfaceInliningPattern(
+      results, ForOp::getOperationName(), forOpReplacementMatcher,
+      forOpReplacementBuilder);
 }
 
 std::optional<APInt> ForOp::getConstantStep() {
@@ -2197,26 +2228,6 @@ void IfOp::getRegionInvocationBounds(
 }
 
 namespace {
-struct RemoveStaticCondition : public OpRewritePattern<IfOp> {
-  using OpRewritePattern<IfOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(IfOp op,
-                                PatternRewriter &rewriter) const override {
-    BoolAttr condition;
-    if (!matchPattern(op.getCondition(), m_Constant(&condition)))
-      return failure();
-
-    if (condition.getValue())
-      replaceOpWithRegion(rewriter, op, op.getThenRegion());
-    else if (!op.getElseRegion().empty())
-      replaceOpWithRegion(rewriter, op, op.getElseRegion());
-    else
-      rewriter.eraseOp(op);
-
-    return success();
-  }
-};
-
 /// Hoist any yielded results whose operands are defined outside
 /// the if, to a select instruction.
 struct ConvertTrivialIfToSelect : public OpRewritePattern<IfOp> {
@@ -2767,10 +2778,11 @@ void IfOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                        MLIRContext *context) {
   results.add<CombineIfs, CombineNestedIfs, ConditionPropagation,
               ConvertTrivialIfToSelect, RemoveEmptyElseBranch,
-              RemoveStaticCondition, ReplaceIfYieldWithConditionOrValue>(
-      context);
+              ReplaceIfYieldWithConditionOrValue>(context);
   populateRegionBranchOpInterfaceCanonicalizationPatterns(
       results, IfOp::getOperationName());
+  populateRegionBranchOpInterfaceInliningPattern(results,
+                                                 IfOp::getOperationName());
 }
 
 Block *IfOp::thenBlock() { return &getThenRegion().back(); }
@@ -3775,6 +3787,8 @@ void WhileOp::getCanonicalizationPatterns(RewritePatternSet &results,
               WhileMoveIfDown>(context);
   populateRegionBranchOpInterfaceCanonicalizationPatterns(
       results, WhileOp::getOperationName());
+  populateRegionBranchOpInterfaceInliningPattern(results,
+                                                 WhileOp::getOperationName());
 }
 
 //===----------------------------------------------------------------------===//
